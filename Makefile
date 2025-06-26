@@ -99,5 +99,5 @@ test4:
 
 .PHONY: push-dev
 push-dev:
-	docker tag kea-dhcp4:local jonasal/kea-dhcp4:dev
-	docker push jonasal/kea-dhcp4:dev
+	docker tag kea-dhcp4:local ${GITHUB_REPOSITORY%/*}/kea-dhcp4:dev
+	docker push ${GITHUB_REPOSITORY%/*}/kea-dhcp4:dev

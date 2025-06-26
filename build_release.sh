@@ -21,9 +21,9 @@ build () {
         --platform linux/amd64,linux/386,linux/arm64,linux/arm/v7 \
         --build-arg KEA_VERSION=${KEA_VERSION} \
         --target "${1}" \
-        $(if [ $(( $(echo ${KEA_VERSION} | cut -d. -f 2 )%2 )) -eq 0 ]; then echo "-t jonasal/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1 )${2}"; fi) \
-        -t "jonasal/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1-2 )${2}" \
-        -t "jonasal/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1-3 )${2}" \
+        $(if [ $(( $(echo ${KEA_VERSION} | cut -d. -f 2 )%2 )) -eq 0 ]; then echo "-t ghcr.io/${GITHUB_REPOSITORY%/*}/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1 )${2}"; fi) \
+        -t "ghcr.io/${GITHUB_REPOSITORY%/*}/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1-2 )${2}" \
+        -t "ghcr.io/${GITHUB_REPOSITORY%/*}/kea-${1}:$(echo ${KEA_VERSION} | cut -d. -f 1-3 )${2}" \
         ${3} \
         ./
 }
