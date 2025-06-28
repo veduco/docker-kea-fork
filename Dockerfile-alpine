@@ -9,6 +9,7 @@ FROM alpine:3.21 AS base
 FROM base AS builder
 
 # Install all packages needed to build Kea.
+ARG PG_INSTALL_VERSION=15
 RUN set -e && apk add --no-cache \
         ca-certificates \
         curl \
@@ -173,11 +174,13 @@ COPY --from=builder /usr/local/sbin/kea-dhcp4 /usr/local/sbin/kea-lfc /usr/local
 #
 # The DHCP4 service image with all relevant hooks included.
 #
-# The libdhcp_mysql_cb.so and libdhcp_pgsql_cb.so libraries depend on the paid
-# libdhcp_cb_cmds.so library, so they are excluded.
 FROM dhcp4-slim AS dhcp4
+ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
-
+COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
+COPY --from=builder /usr/local/share/kea/scripts/ /usr/local/share/kea/scripts/
+RUN apk add --update postgresql${PG_INSTALL_VERSION}-client
+RUN apk add --update mariadb-client
 
 #
 # The DHCP6 service image without any hook libraries.
@@ -189,11 +192,13 @@ COPY --from=builder /usr/local/sbin/kea-dhcp6 /usr/local/sbin/kea-lfc /usr/local
 #
 # The DHCP6 service image with all relevant hooks included.
 #
-# The libdhcp_mysql_cb.so and libdhcp_pgsql_cb.so libraries depend on the paid
-# libdhcp_cb_cmds.so library, so they are excluded.
 FROM dhcp6-slim AS dhcp6
+ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
-
+COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
+COPY --from=builder /usr/local/share/kea/scripts/ /usr/local/share/kea/scripts/
+RUN apk add --update postgresql${PG_INSTALL_VERSION}-client
+RUN apk add --update mariadb-client
 
 #
 # The Kea DHCP DDNS service image.
@@ -202,9 +207,8 @@ FROM common AS dhcp-ddns
 ENV KEA_EXECUTABLE=dhcp-ddns
 COPY --from=builder /usr/local/sbin/kea-dhcp-ddns /usr/local/sbin/
 
-
 #
-# The Hooks image
+# The Hooks image.
 #
 FROM base AS hooks
 COPY --from=builder /hooks /hooks

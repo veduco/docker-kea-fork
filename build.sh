@@ -44,6 +44,7 @@ done
 docker build -f "Dockerfile${APPEND}" \
     -t "kea-${KEA_BINARY}:local${APPEND}" \
     --build-arg KEA_VERSION=${KEA_VERSION} \
+    --build-arg PG_INSTALL_VERSION=15 \
     --target "${KEA_BINARY}" \
     --pull \
     ./

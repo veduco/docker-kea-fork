@@ -84,7 +84,7 @@ RUN meson setup build \
 
 # Then we build and install Kea. Having these as individual steps makes it
 # easier to experiment.
-# NOTE: This will take ~5 hours for arm/v7 on an average 4 core desktop.
+# NOTE: This will take >7 hours for arm/v7 on an average 4 core desktop.
 RUN meson compile -C build
 RUN meson install -C build
 
@@ -184,8 +184,12 @@ COPY --from=builder /usr/local/sbin/kea-dhcp4 /usr/local/sbin/kea-lfc /usr/local
 # The DHCP4 service image with all relevant hooks included.
 #
 FROM dhcp4-slim AS dhcp4
+ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
-
+COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
+COPY --from=builder /usr/local/share/kea/scripts /usr/local/share/kea/scripts
+RUN apt update && apt install -y postgresql-client-${PG_INSTALL_VERSION}
+RUN apt update && apt install -y mariadb-client
 
 #
 # The DHCP6 service image without any hook libraries.
@@ -198,8 +202,12 @@ COPY --from=builder /usr/local/sbin/kea-dhcp6 /usr/local/sbin/kea-lfc /usr/local
 # The DHCP6 service image with all relevant hooks included.
 #
 FROM dhcp6-slim AS dhcp6
+ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
-
+COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
+COPY --from=builder /usr/local/share/kea/scripts /usr/local/share/kea/scripts
+RUN apt update && apt install -y postgresql-client-${PG_INSTALL_VERSION}
+RUN apt update && apt install -y mariadb-client
 
 #
 # The Kea DHCP DDNS service image.
@@ -207,7 +215,6 @@ COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
 FROM common AS dhcp-ddns
 ENV KEA_EXECUTABLE=dhcp-ddns
 COPY --from=builder /usr/local/sbin/kea-dhcp-ddns /usr/local/sbin/
-
 
 #
 # The Hooks image.
