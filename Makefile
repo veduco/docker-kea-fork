@@ -13,51 +13,51 @@ all-alpine: dhcp4-slim-alpine dhcp4-alpine dhcp6-slim-alpine dhcp6-alpine dhcp-d
 
 .PHONY: dhcp4-slim
 dhcp4-slim:
-	./build.sh "dhcp4-slim" $(KEA_VERSION)
+	./build.sh -b "dhcp4-slim" -v $(KEA_VERSION) $(opts)
 
 .PHONY: dhcp4-slim-alpine
 dhcp4-slim-alpine:
-	./build.sh "dhcp4-slim" $(KEA_VERSION) "alpine"
+	./build.sh -b "dhcp4-slim" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: dhcp4
 dhcp4:
-	./build.sh "dhcp4" $(KEA_VERSION)
+	./build.sh -b "dhcp4" -v $(KEA_VERSION) $(opts)
 
 .PHONY: dhcp4-alpine
 dhcp4-alpine:
-	./build.sh "dhcp4" $(KEA_VERSION) "alpine"
+	./build.sh -b "dhcp4" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: dhcp6-slim
 dhcp6-slim:
-	./build.sh "dhcp6-slim" $(KEA_VERSION)
+	./build.sh -b "dhcp6-slim" -v $(KEA_VERSION) $(opts)
 
 .PHONY: dhcp6-slim-alpine
 dhcp6-slim-alpine:
-	./build.sh "dhcp6-slim" $(KEA_VERSION) "alpine"
+	./build.sh -b "dhcp6-slim" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: dhcp6
 dhcp6:
-	./build.sh "dhcp6" $(KEA_VERSION)
+	./build.sh -b "dhcp6" -v $(KEA_VERSION) $(opts)
 
 .PHONY: dhcp6-alpine
 dhcp6-alpine:
-	./build.sh "dhcp6" $(KEA_VERSION) "alpine"
+	./build.sh -b "dhcp6" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: dhcp-ddns
 dhcp-ddns:
-	./build.sh "dhcp-ddns" $(KEA_VERSION)
+	./build.sh -b "dhcp-ddns" -v $(KEA_VERSION) $(opts)
 
 .PHONY: dhcp-ddns-alpine
 dhcp-ddns-alpine:
-	./build.sh "dhcp-ddns" $(KEA_VERSION) "alpine"
+	./build.sh -b "dhcp-ddns" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: hooks
 hooks:
-	./build.sh "hooks" $(KEA_VERSION)
+	./build.sh -b "hooks" -v $(KEA_VERSION) $(opts)
 
 .PHONY: hooks-alpine
 hooks-alpine:
-	./build.sh "hooks" $(KEA_VERSION) "alpine"
+	./build.sh -b "hooks" -v $(KEA_VERSION) -a $(opts)
 
 .PHONY: release
 release:
