@@ -6,6 +6,17 @@ on:
       release:
         type: boolean
         description: Publish release
+      binary:
+        type: choice
+        description: Binary to build
+        options:
+          - all
+          - dhcp4
+          - dhcp6
+          - dhcp4-slim
+          - dhcp6-slim
+          - dhcp-ddns
+          - hooks
   pull_request:
     branches:
       - "main"
@@ -35,7 +46,7 @@ jobs:
           echo "append=${append}" >> $GITHUB_ENV
 
       - name: Build the amd64 version of the ${{ matrix.os }} image
-        run: make all${{ env.append }}
+        run: make ${{ inputs.binary }}${{ env.append }}
 
       - name: Check for new/changed hook libraries
         run: docker run kea-hooks:local${{ env.append }} ls -1 /hooks | diff .github/kea_hook_libraries.list -
