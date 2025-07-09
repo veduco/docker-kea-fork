@@ -1,0 +1,132 @@
+name: "build"
+run-name: "build ${{ inputs.binary }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        type: boolean
+        description: Publish release
+      binary:
+        type: choice
+        description: Binary to build
+        options:
+          - dhcp4
+          - dhcp6
+          - dhcp4-slim
+          - dhcp6-slim
+          - dhcp-ddns
+          - hooks
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  POSTGRES_VERSION: 15
+  architecture: amd64
+
+jobs:
+  docker_buildx:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ "Debian", "Alpine" ]
+    steps:
+      - name: Print inputs
+        run: echo "${{ toJSON(inputs) }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get any OS appends
+        run: |
+          [ "${{ matrix.os }}" == "Alpine" ] && append='-alpine' || append=''
+          echo "append=${append}" | tee -a $GITHUB_ENV
+
+      - name: Get Kea version
+        run: |
+          vKEA_full=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')
+          vKEA_major=$(echo ${vKEA_full} | cut -d. -f 1)
+          vKEA_minor=$(echo ${vKEA_full} | cut -d. -f 2)
+          vKEA_patch=$(echo ${vKEA_full} | cut -d. -f 3)
+
+          echo "vKEA_full=${vKEA_full}"   | tee -a $GITHUB_ENV
+          echo "vKEA_major=${vKEA_major}" | tee -a $GITHUB_ENV
+          echo "vKEA_minor=${vKEA_minor}" | tee -a $GITHUB_ENV
+          echo "vKEA_patch=${vKEA_patch}" | tee -a $GITHUB_ENV
+          echo "stable=$([ $(( ${vKEA_minor}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV
+
+      - name: Check our branch
+        run: |
+          [ ! "${{ github.ref_name }}" == "main" ] && branchAppend='-dev' || branchAppend=''
+          echo "branchAppend=${branchAppend}" | tee -a $GITHUB_ENV
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: ${{ inputs.release }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build common
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile${{ env.append }}
+          target: common
+          #platforms: linux/amd64, linux/arm64, linux/arm/v7
+          platforms: linux/${{ env.architecture }}
+          build-args: |
+            "KEA_VERSION=${{ env.vKEA_full }}"
+            "PG_INSTALL_VERSION=${{ env.POSTGRES_VERSION }}"
+          push: false
+          tags: ghcr.io/${{ github.repository_owner }}/kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ env.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          cache-to: type=gha,mode=max,scope=${{ env.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}
+          flavor: |
+            latest=false
+            prefix=
+            suffix=${{ env.append }}
+          tags: |
+            type=raw,enable=${{ env.stable }},value=${{ env.vKEA_major }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}.${{ env.vKEA_patch }}
+
+      - name: Build and push ${{ inputs.binary }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile${{ env.append }}
+          target: ${{ inputs.binary }}
+          #platforms: linux/amd64, linux/arm64, linux/arm/v7
+          platforms: linux/${{ env.architecture }}
+          build-args: |
+            "KEA_VERSION=${{ env.vKEA_full }}"
+            "PG_INSTALL_VERSION=${{ env.POSTGRES_VERSION }}"
+          push: ${{ inputs.release }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ env.architecture }}:kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          cache-to: type=gha,mode=min,scope=${{ env.architecture }}:kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}

@@ -1,0 +1,128 @@
+name: "make-with-artifacts"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        type: boolean
+        description: Publish release
+      binary:
+        type: choice
+        description: Binary to build
+        options:
+          - all
+          - dhcp4
+          - dhcp6
+          - dhcp4-slim
+          - dhcp6-slim
+          - dhcp-ddns
+          - hooks
+  pull_request:
+    branches:
+      - "main"
+      - "master"
+    paths:
+      - "Dockerfile*"
+      - "Makefile"
+
+jobs:
+  docker_buildx:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ "Debian", "Alpine" ]
+    steps:
+      - name: Print inputs
+        run: echo "${{ toJSON(inputs) }}"
+
+      - name: Checkout the repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.11.1
+
+      - name: Get any OS appends
+        shell: bash
+        run: |
+          [ "${{ matrix.os }}" == "Alpine" ] && append='-alpine' || append=''
+          echo "append=${append}" >> $GITHUB_ENV
+
+      - name: Build the amd64 version of the ${{ matrix.os }} image
+        run: make ${{ inputs.binary }}${{ env.append }}
+
+      - name: Check for new/changed hook libraries
+        if: ${{ inputs.binary == 'all' || inputs.binary == 'hooks' }}
+        run: docker run kea-hooks:local${{ env.append }} ls -1 /hooks | diff .github/kea_hook_libraries.list -
+
+      - name: Export images
+        shell: bash
+        run: |
+          echo "KEA_VERSION=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')" >> $GITHUB_ENV
+          if ${{ inputs.binary == 'all' }}; then
+            docker images | awk '{if ($1 ~ /^kea-/) print $1 " " $2 " " $3 }' | tee /tmp/images.list
+            docker save $(cat /tmp/images.list | awk '{if ($1 ~ /^kea-/) print $3 }') -o /tmp/images.tar
+          else
+            docker images | grep -E "${{ inputs.binary }}\s+" | grep -- "${{ env.append }}"| awk '{if ($1 ~ /^kea-/) print $1 " " $2 " " $3 }' | tee /tmp/images.list
+            docker save $(cat /tmp/images.list | awk '{if ($1 ~ /^kea-/) print $3 }') -o /tmp/images.tar
+          fi
+          cat /tmp/images.list
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kea-${{ inputs.binary}}-${{ env.KEA_VERSION }}-${{ matrix.os }}
+          path: |
+            /tmp/images.list
+            /tmp/images.tar
+          if-no-files-found: error
+
+  publish:
+    if: ${{ always() && inputs.release && !(cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    runs-on: ubuntu-latest
+    needs: [docker_buildx]
+    permissions:
+      packages: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Load and tag images
+        shell: bash
+        run: |
+          KEA_VERSION=$(ls -d kea*/ | tail -1 | sed -E 's%kea-(all|${{ inputs.binary }})-(([0-9](|\.))+)-.*%\2%g')
+          for dir in $(find . -iname "kea-*-*-*" -type d)
+          do
+            pushd $(pwd) &> /dev/null
+            cd ${dir}
+            docker load -i ./images.tar
+            while read IMAGE TAG IMAGE_ID
+            do
+              [[ "$TAG" =~ ^local-alpine$ ]] && append='-alpine' || append=''
+              echo "== Tagging $IMAGE $IMAGE_ID =="
+              if [ $(( $(echo ${KEA_VERSION} | cut -d. -f 2 )%2 )) -eq 0 ]; then
+                docker tag "$IMAGE_ID" "ghcr.io/${GITHUB_REPOSITORY%/*}/$IMAGE:$(echo ${KEA_VERSION} | cut -d. -f 1 )${append}"
+              fi
+              docker tag "$IMAGE_ID" "ghcr.io/${GITHUB_REPOSITORY%/*}/$IMAGE:$(echo ${KEA_VERSION} | cut -d. -f 1-2 )${append}"
+              docker tag "$IMAGE_ID" "ghcr.io/${GITHUB_REPOSITORY%/*}/$IMAGE:$(echo ${KEA_VERSION} | cut -d. -f 1-3 )${append}"
+            done < images.list
+            popd &> /dev/null
+          done
+
+      - name: 'Login to GitHub Container Registry'
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish images
+        run: |
+          docker image ls
+          for image in $(docker images | awk '{if ($1 ~ /.*\/kea-/) print $1 "," $2 "," $3 }')
+          do
+            echo "Pushing ${name}:${tag}"
+            name=$(echo ${image}|awk -F',' '{print $1}')
+            tag=$(echo ${image}|awk -F',' '{print $2}')
+            docker push ${name}:${tag}
+          done
