@@ -17,6 +17,9 @@ on:
           - dhcp6-slim
           - dhcp-ddns
           - hooks
+      version:
+        type: string
+        description: Override committed version
 
 permissions:
   contents: read
@@ -28,15 +31,79 @@ defaults:
 
 env:
   POSTGRES_VERSION: 15
-  architecture: amd64
 
 jobs:
-  docker_buildx:
-    runs-on: ubuntu-latest
+
+  baseVars:
+    runs-on: ubuntu-24.04
+    outputs:
+      vKEA_full: ${{ steps.version.outputs.vKEA_full }}
+      vKEA_major: ${{ steps.version.outputs.vKEA_major }}
+      vKEA_minor: ${{ steps.version.outputs.vKEA_minor }}
+      vKEA_patch: ${{ steps.version.outputs.vKEA_patch }}
+      stable: ${{ steps.version.outputs.stable }}
+      branchAppend: ${{ steps.checkBranch.outputs.branchAppend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Kea version
+        id: version
+        run: |
+          if [ -z "${{ inputs.version }}" ]; then
+            vKEA_full=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')
+          else
+            if [[ "${{ inputs.version }}" =~ [0-9]\.[0-9]\.[0-9] ]]; then
+              vKEA_full="${{ inputs.version }}"
+            else
+              echo "INVALID INPUT VERSION. EXITING."
+              exit 1
+            fi
+          fi
+
+          vKEA_major=$(echo ${vKEA_full} | cut -d. -f 1)
+          vKEA_minor=$(echo ${vKEA_full} | cut -d. -f 2)
+          vKEA_patch=$(echo ${vKEA_full} | cut -d. -f 3)
+
+          echo "vKEA_full=${vKEA_full}"   | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+          echo "vKEA_major=${vKEA_major}" | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+          echo "vKEA_minor=${vKEA_minor}" | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+          echo "vKEA_patch=${vKEA_patch}" | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+          echo "stable=$([ $(( ${vKEA_minor}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+
+      - name: Check our branch
+        id: checkBranch
+        run: |
+          [ ! "${{ github.ref_name }}" == "main" ] && branchAppend='-dev' || branchAppend=''
+          echo "branchAppend=${branchAppend}" | tee -a $GITHUB_ENV "$GITHUB_OUTPUT"
+
+  build:
+    if: ${{ always() && !(cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    needs: baseVars
+    runs-on: ${{ matrix.job.runner }}
     strategy:
       fail-fast: true
       matrix:
-        os: [ "Debian", "Alpine" ]
+        job:
+          - os: "Debian"
+            runner: "ubuntu-24.04"
+            architecture: "amd64"
+          - os: "Alpine"
+            runner: "ubuntu-24.04"
+            architecture: "amd64"
+          - os: "Debian"
+            runner: "ubuntu-24.04-arm"
+            architecture: "arm64"
+          - os: "Alpine"
+            runner: "ubuntu-24.04-arm"
+            architecture: "arm64"
+          - os: "Debian"
+            runner: "ubuntu-24.04-arm"
+            architecture: "arm/v7"
+          - os: "Alpine"
+            runner: "ubuntu-24.04-arm"
+            architecture: "arm/v7"
+
     steps:
       - name: Print inputs
         run: echo "${{ toJSON(inputs) }}"
@@ -46,29 +113,25 @@ jobs:
 
       - name: Get any OS appends
         run: |
-          [ "${{ matrix.os }}" == "Alpine" ] && append='-alpine' || append=''
+          [ "${{ matrix.job.os }}" == "Alpine" ] && append='-alpine' || append=''
           echo "append=${append}" | tee -a $GITHUB_ENV
 
-      - name: Get Kea version
+      - name: Get architecture
         run: |
-          vKEA_full=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')
-          vKEA_major=$(echo ${vKEA_full} | cut -d. -f 1)
-          vKEA_minor=$(echo ${vKEA_full} | cut -d. -f 2)
-          vKEA_patch=$(echo ${vKEA_full} | cut -d. -f 3)
+          if [[ "${{ matrix.job.architecture }}" == "arm/v7" ]]; then
+            echo "architecture=armv7" | tee -a $GITHUB_ENV
+          else
+            echo "architecture=${{ matrix.job.architecture }}" | tee -a $GITHUB_ENV
+          fi
 
-          echo "vKEA_full=${vKEA_full}"   | tee -a $GITHUB_ENV
-          echo "vKEA_major=${vKEA_major}" | tee -a $GITHUB_ENV
-          echo "vKEA_minor=${vKEA_minor}" | tee -a $GITHUB_ENV
-          echo "vKEA_patch=${vKEA_patch}" | tee -a $GITHUB_ENV
-          echo "stable=$([ $(( ${vKEA_minor}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV
-
-      - name: Check our branch
+      - name: Set our env vars
         run: |
-          [ ! "${{ github.ref_name }}" == "main" ] && branchAppend='-dev' || branchAppend=''
-          echo "branchAppend=${branchAppend}" | tee -a $GITHUB_ENV
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+          echo "vKEA_full=${{ needs.baseVars.outputs.vKEA_full }}"   | tee -a $GITHUB_ENV
+          echo "vKEA_major=${{ needs.baseVars.outputs.vKEA_major }}" | tee -a $GITHUB_ENV
+          echo "vKEA_minor=${{ needs.baseVars.outputs.vKEA_minor }}" | tee -a $GITHUB_ENV
+          echo "vKEA_patch=${{ needs.baseVars.outputs.vKEA_patch }}" | tee -a $GITHUB_ENV
+          echo "stable=$([ $(( ${{ needs.baseVars.outputs.vKEA_minor }}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV
+          echo "branchAppend=${{ needs.baseVars.outputs.branchAppend }}" | tee -a $GITHUB_ENV
 
       - name: Set up Docker Buildx
         id: buildx
@@ -88,16 +151,17 @@ jobs:
           context: .
           file: Dockerfile${{ env.append }}
           target: common
-          #platforms: linux/amd64, linux/arm64, linux/arm/v7
-          platforms: linux/${{ env.architecture }}
+          platforms: linux/${{ matrix.job.architecture }}
           build-args: |
             "KEA_VERSION=${{ env.vKEA_full }}"
             "PG_INSTALL_VERSION=${{ env.POSTGRES_VERSION }}"
           push: false
           tags: ghcr.io/${{ github.repository_owner }}/kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ env.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
-          cache-to: type=gha,mode=max,scope=${{ env.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.job.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.job.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
 
       - name: Docker meta
         id: meta
@@ -109,24 +173,143 @@ jobs:
             latest=false
             prefix=
             suffix=${{ env.append }}
+          labels: |
+            maintainer=${{ github.repository_owner }}
           tags: |
             type=raw,enable=${{ env.stable }},value=${{ env.vKEA_major }}
             type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}
             type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}.${{ env.vKEA_patch }}
 
       - name: Build and push ${{ inputs.binary }}
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile${{ env.append }}
           target: ${{ inputs.binary }}
-          #platforms: linux/amd64, linux/arm64, linux/arm/v7
-          platforms: linux/${{ env.architecture }}
+          platforms: linux/${{ matrix.job.architecture }}
           build-args: |
             "KEA_VERSION=${{ env.vKEA_full }}"
             "PG_INSTALL_VERSION=${{ env.POSTGRES_VERSION }}"
           push: ${{ inputs.release }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ env.architecture }}:kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
-          cache-to: type=gha,mode=min,scope=${{ env.architecture }}:kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.job.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+
+      - name: Get some info
+        run: |
+          docker system df
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }} --format "{{json .}}"
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests/
+          digest="${{ steps.push.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${{ matrix.job.os }}_${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-linux-${{ env.architecture }}_kea-${{ inputs.binary }}${{ env.branchAppend }}_${{ env.vKEA_full }}${{ env.append }}
+          path: ${{ runner.temp }}/digests/
+          if-no-files-found: error
+          retention-days: 1
+
+  merge_platform_containers:
+    if: ${{ always() && inputs.release && !(cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    name: Merge Platform Containers
+    runs-on: ubuntu-24.04
+    needs: [baseVars, build]
+    steps:
+      - name: Set our env vars
+        run: |
+          echo "vKEA_full=${{ needs.baseVars.outputs.vKEA_full }}"   | tee -a $GITHUB_ENV
+          echo "vKEA_major=${{ needs.baseVars.outputs.vKEA_major }}" | tee -a $GITHUB_ENV
+          echo "vKEA_minor=${{ needs.baseVars.outputs.vKEA_minor }}" | tee -a $GITHUB_ENV
+          echo "vKEA_patch=${{ needs.baseVars.outputs.vKEA_patch }}" | tee -a $GITHUB_ENV
+          echo "stable=$([ $(( ${{ needs.baseVars.outputs.vKEA_minor }}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV
+          echo "branchAppend=${{ needs.baseVars.outputs.branchAppend }}" | tee -a $GITHUB_ENV
+
+      - name: Download Digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Move digests
+        run: |
+          mkdir -p ${{ runner.temp }}/digests/Debian
+          mkdir -p ${{ runner.temp }}/digests/Alpine
+          cd ${{ runner.temp }}/digests/
+          for file in $(ls Debian_*); do mv ${file} Debian/$(echo "${file}" | sed 's/.*_//'); done
+          for file in $(ls Alpine_*); do mv ${file} Alpine/$(echo "${file}" | sed 's/.*_//'); done
+
+      - name: ls
+        run: |
+          ls -al ${{ runner.temp }}/digests
+          ls -al ${{ runner.temp }}/digests/*
+
+      - name: Login to GHCR
+        if: ${{ inputs.release }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: metaDebian
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}
+          flavor: |
+            latest=false
+            prefix=
+            suffix=
+          labels: |
+            maintainer=${{ github.repository_owner }}
+          tags: |
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}.${{ env.vKEA_patch }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}
+            type=raw,enable=${{ env.stable }},value=${{ env.vKEA_major }}
+
+      - name: Create manifest list and push, Debian
+        working-directory: ${{ runner.temp }}/digests/Debian
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}@sha256:%s ' *)
+
+      - name: Docker meta
+        id: metaAlpine
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}
+          flavor: |
+            latest=false
+            prefix=
+            suffix=-alpine
+          labels: |
+            maintainer=${{ github.repository_owner }}
+          tags: |
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}.${{ env.vKEA_patch }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}
+            type=raw,enable=${{ env.stable }},value=${{ env.vKEA_major }}
+
+      - name: Create manifest list and push, Alpine
+        working-directory: ${{ runner.temp }}/digests/Alpine
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}@sha256:%s ' *)
+
+      - name: Inspect Image
+        run: |
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ steps.metaDebian.outputs.version }}
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ env.branchAppend }}:${{ steps.metaAlpine.outputs.version }}
