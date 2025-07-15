@@ -189,8 +189,10 @@ ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
 COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
 COPY --from=builder /usr/local/share/kea/scripts /usr/local/share/kea/scripts
-RUN apt update && apt install -y postgresql-client-${PG_INSTALL_VERSION}
-RUN apt update && apt install -y mariadb-client
+RUN apt update \
+      && apt-get install -y postgresql-client-${PG_INSTALL_VERSION} \
+      && apt-get install -y mariadb-client \
+      && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
 #
 # The DHCP6 service image without any hook libraries.
@@ -207,8 +209,10 @@ ARG PG_INSTALL_VERSION
 COPY --from=builder /hooks/* /usr/local/lib/kea/hooks/
 COPY --from=builder /usr/local/sbin/kea-admin /usr/local/sbin/
 COPY --from=builder /usr/local/share/kea/scripts /usr/local/share/kea/scripts
-RUN apt update && apt install -y postgresql-client-${PG_INSTALL_VERSION}
-RUN apt update && apt install -y mariadb-client
+RUN apt update \
+      && apt-get install -y postgresql-client-${PG_INSTALL_VERSION} \
+      && apt-get install -y mariadb-client \
+      && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
 #
 # The Kea DHCP DDNS service image.
