@@ -1,0 +1,210 @@
+name: "build binary"
+run-name: "build ${{ inputs.binary }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        type: boolean
+        description: Publish release
+      binary:
+        type: choice
+        description: Binary to build
+        options:
+          - dhcp4
+          - dhcp6
+          - dhcp4-slim
+          - dhcp6-slim
+          - dhcp-ddns
+          - hooks
+      version:
+        type: string
+        description: Override committed version
+      branchAppend:
+        type: string
+        description: Dev append
+        default: ''
+      os:
+        type: choice
+        description: OS to build against
+        options:
+          - Debian
+          - Alpine
+      runner:
+        type: choice
+        description: Runner to use
+        options:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+      architecture:
+        type: choice
+        description: Architecture to build against
+        options:
+          - amd64
+          - arm64
+          - arm/v7
+      vPostgres:
+        type: choice
+        description: Postgres version to include
+        options:
+          - 15
+          - 17
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        required: true
+      binary:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      branchAppend:
+        type: string
+        required: true
+      os:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      architecture:
+        type: string
+        required: true
+      vPostgres:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_common:
+    uses: ./.github/workflows/build_common.yml
+    with:
+      version: ${{ inputs.version }}
+      branchAppend: ${{ inputs.branchAppend }}
+      os: ${{ inputs.os }}
+      runner: ${{ inputs.runner }}
+      architecture: ${{ inputs.architecture }}
+      vPostgres: ${{ inputs.vPostgres }}
+
+  build_binary:
+    if: ${{ always() && !(cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    needs: build_common
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Print inputs
+        run: echo "${{ toJSON(inputs) }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Kea version
+        id: version
+        run: |
+          if [ -z "${{ inputs.version }}" ]; then
+            vKEA_full=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')
+          else
+            if [[ "${{ inputs.version }}" =~ [0-9]\.[0-9]\.[0-9] ]]; then
+              vKEA_full="${{ inputs.version }}"
+            else
+              echo "INVALID INPUT VERSION. EXITING."
+              exit 1
+            fi
+          fi
+
+          vKEA_major=$(echo ${vKEA_full} | cut -d. -f 1)
+          vKEA_minor=$(echo ${vKEA_full} | cut -d. -f 2)
+          vKEA_patch=$(echo ${vKEA_full} | cut -d. -f 3)
+
+          echo "vKEA_full=${vKEA_full}"   | tee -a $GITHUB_ENV
+          echo "vKEA_major=${vKEA_major}" | tee -a $GITHUB_ENV
+          echo "vKEA_minor=${vKEA_minor}" | tee -a $GITHUB_ENV
+          echo "vKEA_patch=${vKEA_patch}" | tee -a $GITHUB_ENV
+          echo "stable=$([ $(( ${vKEA_minor}%2 )) -eq 0 ] && echo 'true' || echo 'false')" | tee -a $GITHUB_ENV
+
+      - name: Get any OS appends
+        run: |
+          [ "${{ inputs.os }}" == "Alpine" ] && append='-alpine' || append=''
+          echo "append=${append}" | tee -a $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: ${{ inputs.release }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ inputs.branchAppend }}
+          flavor: |
+            latest=false
+            prefix=
+            suffix=${{ env.append }}
+          labels: |
+            maintainer=${{ github.repository_owner }}
+          tags: |
+            type=raw,enable=${{ env.stable }},value=${{ env.vKEA_major }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}
+            type=raw,value=${{ env.vKEA_major }}.${{ env.vKEA_minor }}.${{ env.vKEA_patch }}
+
+      - name: Build and push ${{ inputs.binary }}
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile${{ env.append }}
+          target: ${{ inputs.binary }}
+          platforms: linux/${{ inputs.architecture }}
+          build-args: |
+            "KEA_VERSION=${{ env.vKEA_full }}"
+            "PG_INSTALL_VERSION=${{ inputs.vPostgres }}"
+          push: ${{ inputs.release }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ inputs.architecture }}:kea-common${{ inputs.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+
+      - name: Get some info
+        run: |
+          docker system df
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/kea-${{ inputs.binary }}${{ inputs.branchAppend }}:${{ env.vKEA_full }}${{ env.append }} --format "{{json .}}"
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests/
+          digest="${{ steps.push.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${{ inputs.os }}_${digest#sha256:}"
+
+      - name: Set digest architecture
+        run: |
+          if [[ "${{ inputs.architecture }}" == "arm/v7" ]]; then
+            echo "architecture=armv7" | tee -a $GITHUB_ENV
+          else
+            echo "architecture=${{ inputs.architecture }}" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-linux-${{ env.architecture }}_kea-${{ inputs.binary }}${{ inputs.branchAppend }}_${{ env.vKEA_full }}${{ env.append }}
+          path: ${{ runner.temp }}/digests/
+          if-no-files-found: error
+          retention-days: 1

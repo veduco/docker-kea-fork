@@ -1,0 +1,123 @@
+name: "build common"
+run-name: "build common"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        description: Override committed version
+      branchAppend:
+        type: string
+        description: Dev append
+        default: ''
+      os:
+        type: choice
+        description: OS to build against
+        options:
+          - Debian
+          - Alpine
+      runner:
+        type: choice
+        description: Runner to use
+        options:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+      architecture:
+        type: choice
+        description: Architecture to build against
+        options:
+          - amd64
+          - arm64
+          - arm/v7
+      vPostgres:
+        type: choice
+        description: Postgres version to include
+        options:
+          - 15
+          - 17
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      branchAppend:
+        type: string
+        required: true
+      os:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      architecture:
+        type: string
+        required: true
+      vPostgres:
+        type: string
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_common:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Print inputs
+        run: echo "${{ toJSON(inputs) }}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Kea version
+        id: version
+        run: |
+          if [ -z "${{ inputs.version }}" ]; then
+            vKEA_full=$(grep 'KEA_VERSION=' Makefile | sed -E 's|.*"(.*)"|\1|')
+          else
+            if [[ "${{ inputs.version }}" =~ [0-9]\.[0-9]\.[0-9] ]]; then
+              vKEA_full="${{ inputs.version }}"
+            else
+              echo "INVALID INPUT VERSION. EXITING."
+              exit 1
+            fi
+          fi
+
+          vKEA_major=$(echo ${vKEA_full} | cut -d. -f 1)
+          vKEA_minor=$(echo ${vKEA_full} | cut -d. -f 2)
+          vKEA_patch=$(echo ${vKEA_full} | cut -d. -f 3)
+
+          echo "vKEA_full=${vKEA_full}"   | tee -a $GITHUB_ENV
+
+      - name: Check our branch
+        run: |
+          echo "branchAppend=${{ inputs.branchAppend }}" | tee -a $GITHUB_ENV
+
+      - name: Get any OS appends
+        run: |
+          [ "${{ inputs.os }}" == "Alpine" ] && append='-alpine' || append=''
+          echo "append=${append}" | tee -a $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build common
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile${{ env.append }}
+          target: common
+          platforms: linux/${{ inputs.architecture }}
+          build-args: |
+            "KEA_VERSION=${{ env.vKEA_full }}"
+            "PG_INSTALL_VERSION=${{ inputs.vPostgres }}"
+          push: false
+          tags: ghcr.io/${{ github.repository_owner }}/kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ inputs.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.architecture }}:kea-common${{ env.branchAppend }}:${{ env.vKEA_full }}${{ env.append }}
